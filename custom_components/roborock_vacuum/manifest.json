@@ -1,0 +1,13 @@
+{
+  "domain": "roborock_vacuum",
+  "name": "Roborock Vacuum",
+  "version": "1.0.0",
+  "config_flow": true,
+  "documentation": "https://github.com/titof2375/roborock_vacuum",
+  "issue_tracker": "https://github.com/titof2375/roborock_vacuum/issues",
+  "dependencies": [],
+  "codeowners": [],
+  "requirements": ["python-roborock>=2.8.0"],
+  "iot_class": "cloud_polling",
+  "integration_type": "hub"
+}

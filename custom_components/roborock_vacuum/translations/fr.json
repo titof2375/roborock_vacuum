@@ -1,0 +1,28 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connexion Roborock",
+        "description": "Entrez votre adresse email Roborock. Un code de vérification sera envoyé.",
+        "data": {
+          "email": "Adresse email"
+        }
+      },
+      "code": {
+        "title": "Code de vérification",
+        "description": "Entrez le code reçu par email à {email}.",
+        "data": {
+          "code": "Code de vérification"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Impossible de contacter les serveurs Roborock",
+      "invalid_code": "Code de vérification invalide ou expiré",
+      "unknown": "Erreur inattendue"
+    },
+    "abort": {
+      "already_configured": "Ce compte Roborock est déjà configuré"
+    }
+  }
+}

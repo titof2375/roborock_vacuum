@@ -1,0 +1,28 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Roborock Login",
+        "description": "Enter your Roborock email address. A verification code will be sent.",
+        "data": {
+          "email": "Email address"
+        }
+      },
+      "code": {
+        "title": "Verification Code",
+        "description": "Enter the code received by email at {email}.",
+        "data": {
+          "code": "Verification code"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Unable to reach Roborock servers",
+      "invalid_code": "Invalid or expired verification code",
+      "unknown": "Unexpected error"
+    },
+    "abort": {
+      "already_configured": "This Roborock account is already configured"
+    }
+  }
+}
