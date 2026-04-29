@@ -27,9 +27,9 @@ SUPPORT_ROBOROCK = (
     | VacuumEntityFeature.RETURN_HOME
     | VacuumEntityFeature.LOCATE
     | VacuumEntityFeature.STATUS
-    | VacuumEntityFeature.BATTERY
     | VacuumEntityFeature.FAN_SPEED
     | VacuumEntityFeature.SEND_COMMAND
+    # BATTERY retiré : déprécié HA 2026.8, capteur "Batterie" séparé utilisé
 )
 
 
@@ -77,13 +77,6 @@ class RoborockVacuumEntity(CoordinatorEntity[RoborockVacuumCoordinator], StateVa
             manufacturer="Roborock",
             model=dev.product.model if hasattr(dev, "product") and hasattr(dev.product, "model") else self._duid,
         )
-
-    @property
-    def battery_level(self) -> int | None:
-        try:
-            return self._data.props.status.battery
-        except Exception:
-            return None
 
     @property
     def activity(self) -> VacuumActivity | None:
