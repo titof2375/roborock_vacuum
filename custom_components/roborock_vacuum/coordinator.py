@@ -28,68 +28,12 @@ def _try_import(module_path: str, class_name: str) -> Any | None:
     """Essaie d'importer une classe depuis un module, retourne None si introuvable."""
     try:
         mod = importlib.import_module(module_path)
-        return getattr(mod, class_name, None)
+        cls = getattr(mod, class_name, None)
+        if cls is not None:
+            _LOGGER.debug("✓ %s trouvé dans %s", class_name, module_path)
+        return cls
     except ImportError:
         return None
-
-
-def _log_roborock_contents() -> None:
-    """Log le contenu du module roborock pour diagnostic."""
-    try:
-        import roborock as _rb
-        import pkgutil
-        modules = [m.name for m in pkgutil.iter_modules(_rb.__path__, _rb.__name__ + ".")]
-        version = getattr(_rb, "__version__", "inconnue")
-        _LOGGER.warning(
-            "python-roborock version=%s | sous-modules=%s | contenu principal=%s",
-            version,
-            modules,
-            [x for x in dir(_rb) if not x.startswith("_")],
-        )
-    except Exception as err:  # noqa: BLE001
-        _LOGGER.warning("Impossible d'inspecter python-roborock : %s", err)
-
-
-def _import_class(class_name: str, candidates: list[str]) -> Any:
-    """Importe une classe en testant plusieurs chemins."""
-    for module_path in candidates:
-        cls = _try_import(module_path, class_name)
-        if cls is not None:
-            _LOGGER.debug("Importé %s depuis %s", class_name, module_path)
-            return cls
-    _log_roborock_contents()
-    raise UpdateFailed(
-        f"python-roborock incompatible : {class_name} introuvable. "
-        "Consultez les logs pour voir les modules disponibles."
-    )
-
-
-def _get_HomeData() -> Any:
-    return _import_class("HomeData", [
-        "roborock.containers",
-        "roborock",
-        "roborock.api",
-        "roborock.protocol",
-    ])
-
-
-def _get_UserData() -> Any:
-    return _import_class("UserData", [
-        "roborock.containers",
-        "roborock",
-        "roborock.api",
-    ])
-
-
-def _get_MqttClientV1() -> Any:
-    return _import_class("RoborockMqttClientV1", [
-        "roborock.version_1_apis",
-        "roborock",
-        "roborock.api",
-        "roborock.mqtt",
-        "roborock.cloud_api",
-        "roborock.local_api",
-    ])
 
 
 class RoborockVacuumCoordinator(DataUpdateCoordinator[dict[str, RoborockData]]):
@@ -116,10 +60,54 @@ class RoborockVacuumCoordinator(DataUpdateCoordinator[dict[str, RoborockData]]):
 
     async def _async_setup(self) -> None:
         """Initialise les clients MQTT pour chaque appareil."""
-        RoborockMqttClientV1 = _get_MqttClientV1()
-        UserData = _get_UserData()
-        HomeData = _get_HomeData()
 
+        # ── 1. Importer les classes de données (confirmé dans roborock directement) ──
+        from roborock import UserData, HomeData  # noqa: PLC0415
+
+        # ── 2. Diagnostic roborock.mqtt ──────────────────────────────────────────────
+        try:
+            import roborock.mqtt as _mqtt  # noqa: PLC0415
+            _LOGGER.warning(
+                "roborock.mqtt contenu: %s",
+                [x for x in dir(_mqtt) if not x.startswith("_")],
+            )
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.warning("roborock.mqtt inaccessible : %s", err)
+
+        # ── 3. Diagnostic roborock.v1 ────────────────────────────────────────────────
+        try:
+            import roborock.v1 as _v1  # noqa: PLC0415
+            _LOGGER.warning(
+                "roborock.v1 contenu: %s",
+                [x for x in dir(_v1) if not x.startswith("_")],
+            )
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.warning("roborock.v1 inaccessible : %s", err)
+
+        # ── 4. Trouver le client MQTT (ordre de priorité) ────────────────────────────
+        MQTT_CANDIDATES = [
+            ("roborock.mqtt",    "RoborockMqttClient"),
+            ("roborock.mqtt",    "RoborockMqttClientV1"),
+            ("roborock.v1",      "RoborockMqttClientV1"),
+            ("roborock.v1",      "RoborockMqttClient"),
+            ("roborock",         "RoborockMqttClient"),
+            ("roborock",         "RoborockMqttClientV1"),
+        ]
+
+        MqttClient = None
+        for module_path, class_name in MQTT_CANDIDATES:
+            MqttClient = _try_import(module_path, class_name)
+            if MqttClient is not None:
+                _LOGGER.info("Client MQTT : %s.%s", module_path, class_name)
+                break
+
+        if MqttClient is None:
+            raise UpdateFailed(
+                "Client MQTT Roborock introuvable. "
+                "Consultez les logs roborock.mqtt et roborock.v1 ci-dessus."
+            )
+
+        # ── 5. Créer les clients pour chaque appareil ────────────────────────────────
         user_data = UserData.from_dict(self._user_data_dict)
         home_data = HomeData.from_dict(self._home_data_raw)
 
@@ -131,11 +119,19 @@ class RoborockVacuumCoordinator(DataUpdateCoordinator[dict[str, RoborockData]]):
             if product is None:
                 continue
             try:
-                client = RoborockMqttClientV1(
-                    user_data=user_data,
-                    device_info=device,
-                    product_info=product,
-                )
+                # Essai nouvelle API (sans user_data)
+                try:
+                    client = MqttClient(device_info=device, product_info=product)
+                    _LOGGER.debug("Constructeur sans user_data utilisé")
+                except TypeError:
+                    # Ancienne API (avec user_data)
+                    client = MqttClient(
+                        user_data=user_data,
+                        device_info=device,
+                        product_info=product,
+                    )
+                    _LOGGER.debug("Constructeur avec user_data utilisé")
+
                 await client.async_connect()
                 self._clients[device.duid] = client
                 _LOGGER.info("Connecté à %s (%s)", device.name, device.duid)
@@ -144,7 +140,8 @@ class RoborockVacuumCoordinator(DataUpdateCoordinator[dict[str, RoborockData]]):
 
     async def _async_update_data(self) -> dict[str, RoborockData]:
         """Récupère le statut de tous les aspirateurs."""
-        HomeData = _get_HomeData()
+        from roborock import HomeData  # noqa: PLC0415
+
         home_data = HomeData.from_dict(self._home_data_raw)
         result: dict[str, RoborockData] = {}
 
