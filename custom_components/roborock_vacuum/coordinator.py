@@ -1,6 +1,7 @@
 """DataUpdateCoordinator pour Roborock Vacuum."""
 from __future__ import annotations
 
+import importlib
 import logging
 from datetime import timedelta
 from dataclasses import dataclass
@@ -23,37 +24,72 @@ class RoborockData:
     client: Any
 
 
-def _import_home_data() -> Any:
-    """Importe HomeData en testant plusieurs chemins selon la version."""
+def _try_import(module_path: str, class_name: str) -> Any | None:
+    """Essaie d'importer une classe depuis un module, retourne None si introuvable."""
     try:
-        from roborock.containers import HomeData
-        return HomeData
+        mod = importlib.import_module(module_path)
+        return getattr(mod, class_name, None)
     except ImportError:
-        pass
+        return None
+
+
+def _log_roborock_contents() -> None:
+    """Log le contenu du module roborock pour diagnostic."""
     try:
-        from roborock import HomeData  # type: ignore[no-redef]
-        return HomeData
-    except ImportError:
-        pass
+        import roborock as _rb
+        import pkgutil
+        modules = [m.name for m in pkgutil.iter_modules(_rb.__path__, _rb.__name__ + ".")]
+        version = getattr(_rb, "__version__", "inconnue")
+        _LOGGER.warning(
+            "python-roborock version=%s | sous-modules=%s | contenu principal=%s",
+            version,
+            modules,
+            [x for x in dir(_rb) if not x.startswith("_")],
+        )
+    except Exception as err:  # noqa: BLE001
+        _LOGGER.warning("Impossible d'inspecter python-roborock : %s", err)
+
+
+def _import_class(class_name: str, candidates: list[str]) -> Any:
+    """Importe une classe en testant plusieurs chemins."""
+    for module_path in candidates:
+        cls = _try_import(module_path, class_name)
+        if cls is not None:
+            _LOGGER.debug("Importé %s depuis %s", class_name, module_path)
+            return cls
+    _log_roborock_contents()
     raise UpdateFailed(
-        "python-roborock incompatible : HomeData introuvable. "
-        "Vérifiez la version installée (>=2.8.0,<3.0.0 recommandé)."
+        f"python-roborock incompatible : {class_name} introuvable. "
+        "Consultez les logs pour voir les modules disponibles."
     )
 
 
-def _import_user_data() -> Any:
-    """Importe UserData en testant plusieurs chemins selon la version."""
-    try:
-        from roborock.containers import UserData
-        return UserData
-    except ImportError:
-        pass
-    try:
-        from roborock import UserData  # type: ignore[no-redef]
-        return UserData
-    except ImportError:
-        pass
-    raise UpdateFailed("python-roborock incompatible : UserData introuvable.")
+def _get_HomeData() -> Any:
+    return _import_class("HomeData", [
+        "roborock.containers",
+        "roborock",
+        "roborock.api",
+        "roborock.protocol",
+    ])
+
+
+def _get_UserData() -> Any:
+    return _import_class("UserData", [
+        "roborock.containers",
+        "roborock",
+        "roborock.api",
+    ])
+
+
+def _get_MqttClientV1() -> Any:
+    return _import_class("RoborockMqttClientV1", [
+        "roborock.version_1_apis",
+        "roborock",
+        "roborock.api",
+        "roborock.mqtt",
+        "roborock.cloud_api",
+        "roborock.local_api",
+    ])
 
 
 class RoborockVacuumCoordinator(DataUpdateCoordinator[dict[str, RoborockData]]):
@@ -80,13 +116,9 @@ class RoborockVacuumCoordinator(DataUpdateCoordinator[dict[str, RoborockData]]):
 
     async def _async_setup(self) -> None:
         """Initialise les clients MQTT pour chaque appareil."""
-        try:
-            from roborock.version_1_apis import RoborockMqttClientV1
-        except ImportError as err:
-            raise UpdateFailed(f"python-roborock incompatible : {err}") from err
-
-        UserData = _import_user_data()
-        HomeData = _import_home_data()
+        RoborockMqttClientV1 = _get_MqttClientV1()
+        UserData = _get_UserData()
+        HomeData = _get_HomeData()
 
         user_data = UserData.from_dict(self._user_data_dict)
         home_data = HomeData.from_dict(self._home_data_raw)
@@ -112,7 +144,7 @@ class RoborockVacuumCoordinator(DataUpdateCoordinator[dict[str, RoborockData]]):
 
     async def _async_update_data(self) -> dict[str, RoborockData]:
         """Récupère le statut de tous les aspirateurs."""
-        HomeData = _import_home_data()
+        HomeData = _get_HomeData()
         home_data = HomeData.from_dict(self._home_data_raw)
         result: dict[str, RoborockData] = {}
 
