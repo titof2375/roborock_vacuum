@@ -89,6 +89,10 @@ class RoborockVacuumCoordinator(DataUpdateCoordinator[dict[str, RoborockData]]):
                 )
                 continue
 
+            # L'appareil est trouvé — on l'enregistre dans tous les cas
+            # (les entités afficheront "indisponible" si les données sont absentes)
+            result[device.duid] = RoborockData(device=device, props=props)
+
             try:
                 # Rafraîchir les traits essentiels en série
                 for trait in (
@@ -98,16 +102,17 @@ class RoborockVacuumCoordinator(DataUpdateCoordinator[dict[str, RoborockData]]):
                 ):
                     if trait is not None:
                         await trait.refresh()
-
-                result[device.duid] = RoborockData(device=device, props=props)
                 _LOGGER.debug("Données mises à jour pour %s", device.name)
 
             except Exception as err:  # noqa: BLE001
-                _LOGGER.warning("Erreur lecture %s : %s", device.name, err)
+                _LOGGER.warning(
+                    "Données partielles pour %s (appareil peut-être en veille) : %s",
+                    device.name, err,
+                )
 
         if not result:
             raise UpdateFailed(
-                "Aucun aspirateur V1 disponible. "
+                "Aucun aspirateur V1 trouvé. "
                 "Vérifiez que votre modèle est pris en charge."
             )
         return result

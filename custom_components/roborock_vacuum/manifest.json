@@ -1,7 +1,7 @@
 {
   "domain": "roborock_vacuum",
   "name": "Roborock Vacuum",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "config_flow": true,
   "documentation": "https://github.com/titof2375/roborock_vacuum",
   "issue_tracker": "https://github.com/titof2375/roborock_vacuum/issues",
