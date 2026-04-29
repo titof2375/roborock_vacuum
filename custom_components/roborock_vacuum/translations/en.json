@@ -5,7 +5,7 @@
         "title": "Roborock Login",
         "description": "Enter your Roborock email address. A verification code will be sent.",
         "data": {
-          "email": "Email address"
+          "username": "Email address"
         }
       },
       "code": {

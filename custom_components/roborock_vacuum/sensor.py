@@ -130,13 +130,12 @@ class RoborockSensorEntity(CoordinatorEntity[RoborockVacuumCoordinator], SensorE
 
     @property
     def device_info(self) -> DeviceInfo:
-        d = self._data.device
-        p = self._data.product
+        dev = self._data.device
         return DeviceInfo(
             identifiers={(DOMAIN, self._duid)},
-            name=d.name,
+            name=dev.name,
             manufacturer="Roborock",
-            model=p.model if hasattr(p, "model") else str(p.id),
+            model=dev.product.model if hasattr(dev, "product") and hasattr(dev.product, "model") else self._duid,
         )
 
     @property

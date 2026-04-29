@@ -4,8 +4,6 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from roborock.code_mappings import RoborockStateCode
-
 from homeassistant.components.vacuum import (
     StateVacuumEntity,
     VacuumEntityFeature,
@@ -72,13 +70,12 @@ class RoborockVacuumEntity(CoordinatorEntity[RoborockVacuumCoordinator], StateVa
 
     @property
     def device_info(self) -> DeviceInfo:
-        d = self._data.device
-        p = self._data.product
+        dev = self._data.device
         return DeviceInfo(
             identifiers={(DOMAIN, self._duid)},
-            name=d.name,
+            name=dev.name,
             manufacturer="Roborock",
-            model=p.model if hasattr(p, "model") else str(p.id),
+            model=dev.product.model if hasattr(dev, "product") and hasattr(dev.product, "model") else self._duid,
         )
 
     @property
@@ -100,7 +97,6 @@ class RoborockVacuumEntity(CoordinatorEntity[RoborockVacuumCoordinator], StateVa
         charging_states = {7, 8, 100}
         paused_states = {10}
         error_states = {9}
-        idle_states = {1, 2, 3, 17}
 
         if code in cleaning_states:
             return VacuumActivity.CLEANING
@@ -112,8 +108,6 @@ class RoborockVacuumEntity(CoordinatorEntity[RoborockVacuumCoordinator], StateVa
             return VacuumActivity.PAUSED
         if code in error_states:
             return VacuumActivity.ERROR
-        if code in idle_states:
-            return VacuumActivity.IDLE
         return VacuumActivity.IDLE
 
     @property
@@ -131,44 +125,48 @@ class RoborockVacuumEntity(CoordinatorEntity[RoborockVacuumCoordinator], StateVa
             status = self._data.props.status
             attrs["statut_code"] = status.state
             attrs["statut"] = VACUUM_STATUS.get(status.state, str(status.state))
-            if hasattr(status, "clean_area"):
+            if hasattr(status, "clean_area") and status.clean_area is not None:
                 attrs["surface_nettoyee_m2"] = round(status.clean_area / 1_000_000, 2)
-            if hasattr(status, "clean_time"):
+            if hasattr(status, "clean_time") and status.clean_time is not None:
                 attrs["duree_nettoyage_min"] = round(status.clean_time / 60, 1)
             if hasattr(status, "error_code") and status.error_code:
-                from .const import VACUUM_ERRORS
+                from .const import VACUUM_ERRORS  # noqa: PLC0415
                 attrs["erreur"] = VACUUM_ERRORS.get(status.error_code, str(status.error_code))
         except Exception:
             pass
         return attrs
 
+    async def _send(self, command: str, params: list | None = None) -> None:
+        """Envoie une commande via le CommandTrait."""
+        await self._data.props.command.send(command, params)
+
     async def async_start(self) -> None:
-        await self._data.client.send_command("app_start")
+        await self._send("app_start")
         await self.coordinator.async_request_refresh()
 
     async def async_stop(self, **kwargs: Any) -> None:
-        await self._data.client.send_command("app_stop")
+        await self._send("app_stop")
         await self.coordinator.async_request_refresh()
 
     async def async_pause(self) -> None:
-        await self._data.client.send_command("app_pause")
+        await self._send("app_pause")
         await self.coordinator.async_request_refresh()
 
     async def async_return_to_base(self, **kwargs: Any) -> None:
-        await self._data.client.send_command("app_charge")
+        await self._send("app_charge")
         await self.coordinator.async_request_refresh()
 
     async def async_locate(self, **kwargs: Any) -> None:
-        await self._data.client.send_command("find_me")
+        await self._send("find_me")
 
     async def async_set_fan_speed(self, fan_speed: str, **kwargs: Any) -> None:
         code = next((k for k, v in FAN_SPEEDS.items() if v == fan_speed), None)
         if code is not None:
-            await self._data.client.send_command("set_custom_mode", [code])
+            await self._send("set_custom_mode", [code])
             await self.coordinator.async_request_refresh()
 
     async def async_send_command(
         self, command: str, params: dict[str, Any] | list[Any] | None = None, **kwargs: Any
     ) -> None:
-        await self._data.client.send_command(command, params or [])
+        await self._send(command, params if isinstance(params, list) else [])
         await self.coordinator.async_request_refresh()

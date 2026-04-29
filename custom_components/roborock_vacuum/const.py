@@ -2,9 +2,11 @@
 
 DOMAIN = "roborock_vacuum"
 
-CONF_EMAIL     = "email"
+CONF_EMAIL     = "email"       # legacy (anciens config entries)
+CONF_USERNAME  = "username"    # nouveau format
 CONF_USER_DATA = "user_data"
-CONF_HOME_DATA = "home_data"
+CONF_HOME_DATA = "home_data"   # legacy (anciens config entries)
+CONF_BASE_URL  = "base_url"    # optionnel, accélère la connexion
 
 UPDATE_INTERVAL_SECONDS = 30
 

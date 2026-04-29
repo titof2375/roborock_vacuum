@@ -9,7 +9,7 @@ import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-from .const import DOMAIN, CONF_EMAIL, CONF_USER_DATA, CONF_HOME_DATA
+from .const import DOMAIN, CONF_USERNAME, CONF_USER_DATA, CONF_BASE_URL
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -17,10 +17,10 @@ _LOGGER = logging.getLogger(__name__)
 class RoborockVacuumConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Config flow en 2 étapes : email → code OTP."""
 
-    VERSION = 1
+    VERSION = 2
 
     def __init__(self) -> None:
-        self._email: str = ""
+        self._username: str = ""
         self._client: Any = None
 
     async def async_step_user(
@@ -30,20 +30,20 @@ class RoborockVacuumConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
 
         if user_input is not None:
-            self._email = user_input[CONF_EMAIL].strip()
+            self._username = user_input["username"].strip()
             try:
-                from roborock.web_api import RoborockApiClient
+                from roborock.web_api import RoborockApiClient  # noqa: PLC0415
             except ImportError:
                 errors["base"] = "cannot_connect"
                 _LOGGER.error("python-roborock non installé ou incompatible")
                 return self.async_show_form(
                     step_id="user",
-                    data_schema=vol.Schema({vol.Required(CONF_EMAIL): str}),
+                    data_schema=vol.Schema({vol.Required("username"): str}),
                     errors=errors,
                 )
 
             session = async_get_clientsession(self.hass)
-            self._client = RoborockApiClient(username=self._email, session=session)
+            self._client = RoborockApiClient(username=self._username, session=session)
             try:
                 await self._client.request_code()
             except Exception as err:  # noqa: BLE001
@@ -54,7 +54,7 @@ class RoborockVacuumConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         return self.async_show_form(
             step_id="user",
-            data_schema=vol.Schema({vol.Required(CONF_EMAIL): str}),
+            data_schema=vol.Schema({vol.Required("username"): str}),
             errors=errors,
         )
 
@@ -67,25 +67,37 @@ class RoborockVacuumConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             code = user_input["code"].strip()
             try:
-                user_data = await self._client.code_login(code)
-                home_data = await self._client.get_home_data_v2(user_data)
+                # Essayer la nouvelle méthode d'abord, puis l'ancienne
+                if hasattr(self._client, "code_login_v4"):
+                    user_data = await self._client.code_login_v4(code)
+                else:
+                    user_data = await self._client.code_login(code)
             except Exception as err:  # noqa: BLE001
                 _LOGGER.error("Code Roborock invalide : %s", err)
                 errors["base"] = "invalid_code"
             else:
-                await self.async_set_unique_id(self._email)
+                await self.async_set_unique_id(self._username)
                 self._abort_if_unique_id_configured()
 
-                # Stockage en dict pour éviter tout import de containers
-                user_data_dict = user_data.as_dict() if hasattr(user_data, "as_dict") else dict(user_data)
-                home_data_dict = home_data.as_dict() if hasattr(home_data, "as_dict") else dict(home_data)
+                user_data_dict = (
+                    user_data.as_dict()
+                    if hasattr(user_data, "as_dict")
+                    else dict(user_data)
+                )
+
+                # base_url accélère les reconnexions futures (optionnel)
+                base_url: str | None = None
+                try:
+                    base_url = await self._client.base_url
+                except Exception:  # noqa: BLE001
+                    pass
 
                 return self.async_create_entry(
-                    title=self._email,
+                    title=self._username,
                     data={
-                        CONF_EMAIL:     self._email,
+                        CONF_USERNAME: self._username,
                         CONF_USER_DATA: user_data_dict,
-                        CONF_HOME_DATA: home_data_dict,
+                        CONF_BASE_URL: base_url,
                     },
                 )
 
@@ -93,5 +105,5 @@ class RoborockVacuumConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             step_id="code",
             data_schema=vol.Schema({vol.Required("code"): str}),
             errors=errors,
-            description_placeholders={"email": self._email},
+            description_placeholders={"email": self._username},
         )

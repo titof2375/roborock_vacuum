@@ -5,7 +5,7 @@
         "title": "Connexion Roborock",
         "description": "Entrez votre adresse email Roborock. Un code de vérification sera envoyé.",
         "data": {
-          "email": "Adresse email"
+          "username": "Adresse email"
         }
       },
       "code": {
