@@ -12,7 +12,7 @@ from homeassistant.components.sensor import (
     SensorDeviceClass,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import PERCENTAGE, UnitOfTime, UnitOfArea
+from homeassistant.const import PERCENTAGE, UnitOfTime
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -27,9 +27,11 @@ _LOGGER = logging.getLogger(__name__)
 @dataclass(frozen=True)
 class RoborockSensorEntityDescription(SensorEntityDescription):
     value_fn: Callable[[RoborockData], Any] = lambda d: None
+    is_dock: bool = False  # True = entité liée au dock
 
 
-SENSOR_DESCRIPTIONS: tuple[RoborockSensorEntityDescription, ...] = (
+# ── Capteurs de l'aspirateur ────────────────────────────────────────────────
+VACUUM_SENSOR_DESCRIPTIONS: tuple[RoborockSensorEntityDescription, ...] = (
     RoborockSensorEntityDescription(
         key="battery",
         name="Batterie",
@@ -91,6 +93,51 @@ SENSOR_DESCRIPTIONS: tuple[RoborockSensorEntityDescription, ...] = (
     ),
 )
 
+# ── Capteurs du dock ─────────────────────────────────────────────────────────
+DOCK_SENSOR_DESCRIPTIONS: tuple[RoborockSensorEntityDescription, ...] = (
+    RoborockSensorEntityDescription(
+        key="dock_status",
+        name="Statut dock",
+        is_dock=True,
+        value_fn=lambda d: _get_dock_status(d),
+    ),
+    RoborockSensorEntityDescription(
+        key="dust_collection",
+        name="Collecte poussière",
+        is_dock=True,
+        value_fn=lambda d: _get_dust_collection(d),
+    ),
+)
+
+
+def _get_dock_status(data: RoborockData) -> str | None:
+    """Retourne le statut du dock depuis props.status."""
+    try:
+        status = data.props.status
+        # dock_error_status ou dock_type_status selon la version de la lib
+        for attr in ("dock_error_status", "dock_station_status", "dock_type"):
+            val = getattr(status, attr, None)
+            if val is not None:
+                return str(val)
+        return None
+    except Exception:
+        return None
+
+
+def _get_dust_collection(data: RoborockData) -> str | None:
+    """Retourne le mode de collecte de poussière si disponible."""
+    try:
+        dc = data.props.dust_collection_mode
+        if dc is None:
+            return None
+        for attr in ("mode", "state", "value"):
+            val = getattr(dc, attr, None)
+            if val is not None:
+                return str(val)
+        return None
+    except Exception:
+        return None
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -98,16 +145,21 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     coordinator: RoborockVacuumCoordinator = hass.data[DOMAIN][entry.entry_id]
-    entities = [
-        RoborockSensorEntity(coordinator, duid, entry.entry_id, desc)
-        for duid in coordinator.data
-        for desc in SENSOR_DESCRIPTIONS
-    ]
+    entities: list[RoborockSensorEntity] = []
+
+    for duid in coordinator.data:
+        # Capteurs de l'aspirateur
+        for desc in VACUUM_SENSOR_DESCRIPTIONS:
+            entities.append(RoborockSensorEntity(coordinator, duid, entry.entry_id, desc))
+        # Capteurs du dock
+        for desc in DOCK_SENSOR_DESCRIPTIONS:
+            entities.append(RoborockSensorEntity(coordinator, duid, entry.entry_id, desc))
+
     async_add_entities(entities)
 
 
 class RoborockSensorEntity(CoordinatorEntity[RoborockVacuumCoordinator], SensorEntity):
-    """Capteur Roborock."""
+    """Capteur Roborock (aspirateur ou dock)."""
 
     _attr_has_entity_name = True
     entity_description: RoborockSensorEntityDescription
@@ -131,11 +183,27 @@ class RoborockSensorEntity(CoordinatorEntity[RoborockVacuumCoordinator], SensorE
     @property
     def device_info(self) -> DeviceInfo:
         dev = self._data.device
+        model = (
+            dev.product.model
+            if hasattr(dev, "product") and hasattr(dev.product, "model")
+            else self._duid
+        )
+
+        if self.entity_description.is_dock:
+            # Appareil "Dock" lié au vacuum via via_device
+            return DeviceInfo(
+                identifiers={(DOMAIN, f"{self._duid}_dock")},
+                name=f"{dev.name} Dock",
+                manufacturer="Roborock",
+                model=f"{model} Dock",
+                via_device=(DOMAIN, self._duid),
+            )
+
         return DeviceInfo(
             identifiers={(DOMAIN, self._duid)},
             name=dev.name,
             manufacturer="Roborock",
-            model=dev.product.model if hasattr(dev, "product") and hasattr(dev.product, "model") else self._duid,
+            model=model,
         )
 
     @property
