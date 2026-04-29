@@ -17,7 +17,7 @@ _LOGGER = logging.getLogger(__name__)
 class RoborockVacuumConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Config flow en 2 étapes : email → code OTP."""
 
-    VERSION = 2
+    VERSION = 1
 
     def __init__(self) -> None:
         self._username: str = ""
