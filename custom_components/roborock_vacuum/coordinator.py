@@ -6,13 +6,7 @@ from datetime import timedelta
 from dataclasses import dataclass
 from typing import Any
 
-from roborock.web_api import RoborockApiClient
-from roborock.containers import UserData, HomeDataDevice, HomeDataProduct
-from roborock.roborock_typing import DeviceProp
-from roborock.version_1_apis import RoborockMqttClientV1
-
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import DOMAIN, UPDATE_INTERVAL_SECONDS
@@ -23,10 +17,43 @@ _LOGGER = logging.getLogger(__name__)
 @dataclass
 class RoborockData:
     """Données d'un aspirateur."""
-    device: HomeDataDevice
-    product: HomeDataProduct
-    props: DeviceProp
-    client: RoborockMqttClientV1
+    device: Any
+    product: Any
+    props: Any
+    client: Any
+
+
+def _import_home_data() -> Any:
+    """Importe HomeData en testant plusieurs chemins selon la version."""
+    try:
+        from roborock.containers import HomeData
+        return HomeData
+    except ImportError:
+        pass
+    try:
+        from roborock import HomeData  # type: ignore[no-redef]
+        return HomeData
+    except ImportError:
+        pass
+    raise UpdateFailed(
+        "python-roborock incompatible : HomeData introuvable. "
+        "Vérifiez la version installée (>=2.8.0,<3.0.0 recommandé)."
+    )
+
+
+def _import_user_data() -> Any:
+    """Importe UserData en testant plusieurs chemins selon la version."""
+    try:
+        from roborock.containers import UserData
+        return UserData
+    except ImportError:
+        pass
+    try:
+        from roborock import UserData  # type: ignore[no-redef]
+        return UserData
+    except ImportError:
+        pass
+    raise UpdateFailed("python-roborock incompatible : UserData introuvable.")
 
 
 class RoborockVacuumCoordinator(DataUpdateCoordinator[dict[str, RoborockData]]):
@@ -36,13 +63,13 @@ class RoborockVacuumCoordinator(DataUpdateCoordinator[dict[str, RoborockData]]):
         self,
         hass: HomeAssistant,
         email: str,
-        user_data: UserData,
+        user_data_dict: dict,
         home_data_raw: dict,
     ) -> None:
         self._email = email
-        self._user_data = user_data
+        self._user_data_dict = user_data_dict
         self._home_data_raw = home_data_raw
-        self._clients: dict[str, RoborockMqttClientV1] = {}
+        self._clients: dict[str, Any] = {}
 
         super().__init__(
             hass,
@@ -53,11 +80,15 @@ class RoborockVacuumCoordinator(DataUpdateCoordinator[dict[str, RoborockData]]):
 
     async def _async_setup(self) -> None:
         """Initialise les clients MQTT pour chaque appareil."""
-        from roborock.containers import HomeData
-        from roborock.version_1_apis import RoborockMqttClientV1
+        try:
+            from roborock.version_1_apis import RoborockMqttClientV1
+        except ImportError as err:
+            raise UpdateFailed(f"python-roborock incompatible : {err}") from err
 
-        session = async_get_clientsession(self.hass)
-        web_api = RoborockApiClient(username=self._email, session=session)
+        UserData = _import_user_data()
+        HomeData = _import_home_data()
+
+        user_data = UserData.from_dict(self._user_data_dict)
         home_data = HomeData.from_dict(self._home_data_raw)
 
         for device in home_data.devices + home_data.received_devices:
@@ -69,7 +100,7 @@ class RoborockVacuumCoordinator(DataUpdateCoordinator[dict[str, RoborockData]]):
                 continue
             try:
                 client = RoborockMqttClientV1(
-                    user_data=self._user_data,
+                    user_data=user_data,
                     device_info=device,
                     product_info=product,
                 )
@@ -81,8 +112,7 @@ class RoborockVacuumCoordinator(DataUpdateCoordinator[dict[str, RoborockData]]):
 
     async def _async_update_data(self) -> dict[str, RoborockData]:
         """Récupère le statut de tous les aspirateurs."""
-        from roborock.containers import HomeData
-
+        HomeData = _import_home_data()
         home_data = HomeData.from_dict(self._home_data_raw)
         result: dict[str, RoborockData] = {}
 
