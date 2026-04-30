@@ -1,4 +1,4 @@
-"""Entités Button Roborock — reset consommables + contrôle dock."""
+"""Entités Button Roborock — reset consommables, dock, nettoyage pièce."""
 from __future__ import annotations
 
 import logging
@@ -22,15 +22,22 @@ class RoborockButtonDescription(ButtonEntityDescription):
     command: str = ""
     params: list = field(default_factory=list)
     is_dock: bool = False
+    custom_action: str = ""   # action spéciale (ex: "clean_room")
 
 
 BUTTON_DESCRIPTIONS: tuple[RoborockButtonDescription, ...] = (
     # ── Nettoyage ────────────────────────────────────────────────────────────
     RoborockButtonDescription(
         key="spot_clean",
-        name="Nettoyage ponctuel",
+        name="Nettoyage ponctuel (spot)",
         icon="mdi:target",
         command="app_spot",
+    ),
+    RoborockButtonDescription(
+        key="clean_room",
+        name="Nettoyer la pièce sélectionnée",
+        icon="mdi:floor-plan",
+        custom_action="clean_room",
     ),
     # ── Reset consommables ───────────────────────────────────────────────────
     RoborockButtonDescription(
@@ -127,13 +134,7 @@ class RoborockButtonEntity(CoordinatorEntity[RoborockVacuumCoordinator], ButtonE
     _attr_has_entity_name = True
     entity_description: RoborockButtonDescription
 
-    def __init__(
-        self,
-        coordinator: RoborockVacuumCoordinator,
-        duid: str,
-        entry_id: str,
-        description: RoborockButtonDescription,
-    ) -> None:
+    def __init__(self, coordinator, duid, entry_id, description):
         super().__init__(coordinator)
         self._duid = duid
         self.entity_description = description
@@ -164,11 +165,27 @@ class RoborockButtonEntity(CoordinatorEntity[RoborockVacuumCoordinator], ButtonE
 
     async def async_press(self) -> None:
         try:
-            await self._data.props.command.send(
-                self.entity_description.command,
-                self.entity_description.params or [],
-            )
+            if self.entity_description.custom_action == "clean_room":
+                await self._action_clean_room()
+            else:
+                await self._data.props.command.send(
+                    self.entity_description.command,
+                    self.entity_description.params or [],
+                )
             await self.coordinator.async_request_refresh()
-            _LOGGER.info("Commande %s envoyée", self.entity_description.key)
         except Exception as err:
             _LOGGER.warning("Erreur %s : %s", self.entity_description.key, err)
+
+    async def _action_clean_room(self) -> None:
+        """Nettoie la(les) pièce(s) sélectionnée(s) via le select Pièce à nettoyer."""
+        selected = self.coordinator.selected_rooms.get(self._duid, [])
+        if not selected:
+            # Aucune pièce sélectionnée → nettoyage complet
+            _LOGGER.info("Aucune pièce sélectionnée — nettoyage complet")
+            await self._data.props.command.send("app_start", [])
+            return
+        # Nettoyage des pièces sélectionnées
+        segments = [{"id": rid, "order": i + 1, "repeats": 1}
+                    for i, rid in enumerate(selected)]
+        _LOGGER.info("Nettoyage pièces : %s", segments)
+        await self._data.props.command.send("app_segment_clean", segments)

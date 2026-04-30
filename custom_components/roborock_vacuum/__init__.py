@@ -18,7 +18,7 @@ from .coordinator import RoborockVacuumCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS = ["vacuum", "sensor", "select", "switch", "number", "button"]
+PLATFORMS = ["vacuum", "sensor", "select", "switch", "number", "button", "time"]
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

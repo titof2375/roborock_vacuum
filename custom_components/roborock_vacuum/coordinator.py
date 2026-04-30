@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass, field
 from datetime import timedelta
-from dataclasses import dataclass
 from typing import Any
 
 from homeassistant.core import HomeAssistant
@@ -31,8 +31,10 @@ _TRAITS_TO_REFRESH = (
 @dataclass
 class RoborockData:
     """Données d'un aspirateur (nouveau format API)."""
-    device: Any   # roborock.devices.device.RoborockDevice
-    props: Any    # roborock.devices.traits.v1.PropertiesApi
+    device: Any                          # RoborockDevice
+    props: Any                           # PropertiesApi
+    rooms: dict[int, str] = field(default_factory=dict)   # {segment_id: nom}
+    schedule: dict = field(default_factory=dict)           # timer actif
 
 
 class RoborockVacuumCoordinator(DataUpdateCoordinator[dict[str, RoborockData]]):
@@ -49,6 +51,8 @@ class RoborockVacuumCoordinator(DataUpdateCoordinator[dict[str, RoborockData]]):
         self._user_data_dict = user_data_dict
         self._base_url = base_url
         self._manager: Any = None
+        # Pièces sélectionnées par duid (pour clean room button)
+        self.selected_rooms: dict[str, list[int]] = {}
 
         super().__init__(
             hass,
@@ -93,12 +97,17 @@ class RoborockVacuumCoordinator(DataUpdateCoordinator[dict[str, RoborockData]]):
         for device in devices:
             props = device.v1_properties
             if props is None:
-                _LOGGER.debug("Appareil %s ignoré (pas V1 ou non supporté)", device.name)
+                _LOGGER.debug("Appareil %s ignoré (pas V1)", device.name)
                 continue
 
-            # Enregistrement dans tous les cas — entités "indisponible" si données absentes
-            result[device.duid] = RoborockData(device=device, props=props)
+            rooms: dict[int, str] = {}
+            schedule: dict = {}
 
+            # Enregistrement immédiat — entités "indisponible" si données absentes
+            result[device.duid] = RoborockData(device=device, props=props,
+                                               rooms=rooms, schedule=schedule)
+
+            # ── Rafraîchir les traits ──────────────────────────────────────
             try:
                 for trait_name in _TRAITS_TO_REFRESH:
                     trait = getattr(props, trait_name, None)
@@ -106,20 +115,49 @@ class RoborockVacuumCoordinator(DataUpdateCoordinator[dict[str, RoborockData]]):
                         try:
                             await trait.refresh()
                         except Exception:  # noqa: BLE001
-                            pass  # trait non supporté par ce modèle — on ignore
+                            pass
                 _LOGGER.debug("Données mises à jour pour %s", device.name)
-
             except Exception as err:  # noqa: BLE001
                 _LOGGER.warning(
-                    "Données partielles pour %s (appareil peut-être en veille) : %s",
+                    "Données partielles pour %s (peut-être en veille) : %s",
                     device.name, err,
                 )
 
+            # ── Récupérer les pièces ──────────────────────────────────────
+            try:
+                raw = await props.command.send("app_get_room_mapping", [])
+                if raw and isinstance(raw, list):
+                    for item in raw:
+                        if isinstance(item, (list, tuple)) and len(item) >= 2:
+                            rooms[int(item[0])] = str(item[1])
+                    _LOGGER.debug("%d pièce(s) trouvée(s) pour %s", len(rooms), device.name)
+            except Exception as err:  # noqa: BLE001
+                _LOGGER.debug("Pièces non disponibles pour %s : %s", device.name, err)
+
+            # ── Récupérer le timer (programmation) ─────────────────────────
+            try:
+                timers = await props.command.send("get_timer", [])
+                if timers and isinstance(timers, list) and len(timers) > 0:
+                    # On prend le premier timer comme notre timer de programmation
+                    t = timers[0]
+                    if isinstance(t, (list, tuple)) and len(t) >= 3:
+                        meta = t[2] if isinstance(t[2], dict) else {}
+                        schedule = {
+                            "id": str(t[0]),
+                            "enabled": bool(meta.get("enabled", 0)),
+                            "start_hour": int(meta.get("start_hour", 8)),
+                            "start_minute": int(meta.get("start_minute", 0)),
+                            "day": meta.get("day", [0, 1, 2, 3, 4, 5, 6]),
+                        }
+            except Exception as err:  # noqa: BLE001
+                _LOGGER.debug("Timer non disponible pour %s : %s", device.name, err)
+
+            # Mise à jour avec les données enrichies
+            result[device.duid] = RoborockData(device=device, props=props,
+                                               rooms=rooms, schedule=schedule)
+
         if not result:
-            raise UpdateFailed(
-                "Aucun aspirateur V1 trouvé. "
-                "Vérifiez que votre modèle est pris en charge."
-            )
+            raise UpdateFailed("Aucun aspirateur V1 trouvé.")
         return result
 
     async def async_shutdown(self) -> None:
