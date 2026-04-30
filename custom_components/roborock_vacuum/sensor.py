@@ -1,4 +1,4 @@
-"""Capteurs Roborock Vacuum."""
+"""Capteurs Roborock Vacuum — aspirateur + dock + consommables."""
 from __future__ import annotations
 
 import logging
@@ -18,7 +18,7 @@ from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN, VACUUM_STATUS, VACUUM_ERRORS
+from .const import DOMAIN, VACUUM_STATUS, VACUUM_ERRORS, CONSUMABLE_MAX_SECONDS
 from .coordinator import RoborockVacuumCoordinator, RoborockData
 
 _LOGGER = logging.getLogger(__name__)
@@ -27,11 +27,51 @@ _LOGGER = logging.getLogger(__name__)
 @dataclass(frozen=True)
 class RoborockSensorEntityDescription(SensorEntityDescription):
     value_fn: Callable[[RoborockData], Any] = lambda d: None
-    is_dock: bool = False  # True = entité liée au dock
+    is_dock: bool = False
 
 
-# ── Capteurs de l'aspirateur ────────────────────────────────────────────────
-VACUUM_SENSOR_DESCRIPTIONS: tuple[RoborockSensorEntityDescription, ...] = (
+# ── Helpers ──────────────────────────────────────────────────────────────────
+
+def _consumable_pct(data: RoborockData, attr: str, max_sec: int) -> int | None:
+    """Retourne le % de vie restante d'un consommable."""
+    try:
+        used = getattr(data.props.consumables, attr, None)
+        if used is None:
+            return None
+        return max(0, round(100 * (1 - used / max_sec)))
+    except Exception:
+        return None
+
+
+def _get_dock_status(data: RoborockData) -> str | None:
+    try:
+        status = data.props.status
+        for attr in ("dock_error_status", "dock_station_status", "dock_type"):
+            val = getattr(status, attr, None)
+            if val is not None:
+                return str(val)
+        return None
+    except Exception:
+        return None
+
+
+def _get_dust_collection(data: RoborockData) -> str | None:
+    try:
+        dc = data.props.dust_collection_mode
+        if dc is None:
+            return None
+        for attr in ("mode", "state", "value"):
+            val = getattr(dc, attr, None)
+            if val is not None:
+                return str(val)
+        return None
+    except Exception:
+        return None
+
+
+# ── Capteurs aspirateur ───────────────────────────────────────────────────────
+
+VACUUM_SENSORS: tuple[RoborockSensorEntityDescription, ...] = (
     RoborockSensorEntityDescription(
         key="battery",
         name="Batterie",
@@ -91,10 +131,52 @@ VACUUM_SENSOR_DESCRIPTIONS: tuple[RoborockSensorEntityDescription, ...] = (
         value_fn=lambda d: d.props.clean_summary.clean_count
         if d.props and d.props.clean_summary and hasattr(d.props.clean_summary, "clean_count") else None,
     ),
+    # ── Consommables ──────────────────────────────────────────────────────────
+    RoborockSensorEntityDescription(
+        key="main_brush_life",
+        name="Brosse principale restante",
+        native_unit_of_measurement=PERCENTAGE,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda d: _consumable_pct(d, "main_brush_work_time",
+                                           CONSUMABLE_MAX_SECONDS["main_brush"]),
+    ),
+    RoborockSensorEntityDescription(
+        key="side_brush_life",
+        name="Brosse latérale restante",
+        native_unit_of_measurement=PERCENTAGE,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda d: _consumable_pct(d, "side_brush_work_time",
+                                           CONSUMABLE_MAX_SECONDS["side_brush"]),
+    ),
+    RoborockSensorEntityDescription(
+        key="filter_life",
+        name="Filtre restant",
+        native_unit_of_measurement=PERCENTAGE,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda d: _consumable_pct(d, "filter_work_time",
+                                           CONSUMABLE_MAX_SECONDS["filter"]),
+    ),
+    RoborockSensorEntityDescription(
+        key="sensor_dirty_life",
+        name="Capteur obstacle restant",
+        native_unit_of_measurement=PERCENTAGE,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda d: _consumable_pct(d, "sensor_dirty_time",
+                                           CONSUMABLE_MAX_SECONDS["sensor"]),
+    ),
+    RoborockSensorEntityDescription(
+        key="mop_life",
+        name="Serpillière restante",
+        native_unit_of_measurement=PERCENTAGE,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda d: _consumable_pct(d, "mop_work_time",
+                                           CONSUMABLE_MAX_SECONDS["mop"]),
+    ),
 )
 
-# ── Capteurs du dock ─────────────────────────────────────────────────────────
-DOCK_SENSOR_DESCRIPTIONS: tuple[RoborockSensorEntityDescription, ...] = (
+# ── Capteurs dock ─────────────────────────────────────────────────────────────
+
+DOCK_SENSORS: tuple[RoborockSensorEntityDescription, ...] = (
     RoborockSensorEntityDescription(
         key="dock_status",
         name="Statut dock",
@@ -110,51 +192,17 @@ DOCK_SENSOR_DESCRIPTIONS: tuple[RoborockSensorEntityDescription, ...] = (
 )
 
 
-def _get_dock_status(data: RoborockData) -> str | None:
-    """Retourne le statut du dock depuis props.status."""
-    try:
-        status = data.props.status
-        # dock_error_status ou dock_type_status selon la version de la lib
-        for attr in ("dock_error_status", "dock_station_status", "dock_type"):
-            val = getattr(status, attr, None)
-            if val is not None:
-                return str(val)
-        return None
-    except Exception:
-        return None
-
-
-def _get_dust_collection(data: RoborockData) -> str | None:
-    """Retourne le mode de collecte de poussière si disponible."""
-    try:
-        dc = data.props.dust_collection_mode
-        if dc is None:
-            return None
-        for attr in ("mode", "state", "value"):
-            val = getattr(dc, attr, None)
-            if val is not None:
-                return str(val)
-        return None
-    except Exception:
-        return None
-
-
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     coordinator: RoborockVacuumCoordinator = hass.data[DOMAIN][entry.entry_id]
-    entities: list[RoborockSensorEntity] = []
-
-    for duid in coordinator.data:
-        # Capteurs de l'aspirateur
-        for desc in VACUUM_SENSOR_DESCRIPTIONS:
-            entities.append(RoborockSensorEntity(coordinator, duid, entry.entry_id, desc))
-        # Capteurs du dock
-        for desc in DOCK_SENSOR_DESCRIPTIONS:
-            entities.append(RoborockSensorEntity(coordinator, duid, entry.entry_id, desc))
-
+    entities: list[RoborockSensorEntity] = [
+        RoborockSensorEntity(coordinator, duid, entry.entry_id, desc)
+        for duid in coordinator.data
+        for desc in (*VACUUM_SENSORS, *DOCK_SENSORS)
+    ]
     async_add_entities(entities)
 
 
@@ -188,9 +236,7 @@ class RoborockSensorEntity(CoordinatorEntity[RoborockVacuumCoordinator], SensorE
             if hasattr(dev, "product") and hasattr(dev.product, "model")
             else self._duid
         )
-
         if self.entity_description.is_dock:
-            # Appareil "Dock" lié au vacuum via via_device
             return DeviceInfo(
                 identifiers={(DOMAIN, f"{self._duid}_dock")},
                 name=f"{dev.name} Dock",
@@ -198,7 +244,6 @@ class RoborockSensorEntity(CoordinatorEntity[RoborockVacuumCoordinator], SensorE
                 model=f"{model} Dock",
                 via_device=(DOMAIN, self._duid),
             )
-
         return DeviceInfo(
             identifiers={(DOMAIN, self._duid)},
             name=dev.name,

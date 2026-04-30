@@ -69,3 +69,27 @@ FAN_SPEEDS = {
     104: "Maximum",
     105: "Mode vadrouille",
 }
+
+# Intensité serpillière
+MOP_INTENSITIES = {
+    200: "Désactivé",
+    201: "Faible",
+    202: "Modéré",
+    203: "Intense",
+}
+
+# Mode serpillière
+MOP_MODES = {
+    300: "Standard",
+    301: "Profond",
+    303: "Profond+",
+}
+
+# Durée de vie max des consommables (secondes)
+CONSUMABLE_MAX_SECONDS = {
+    "main_brush": 300 * 3600,   # 300 h
+    "side_brush": 200 * 3600,   # 200 h
+    "filter":     150 * 3600,   # 150 h
+    "sensor":      30 * 3600,   #  30 h
+    "mop":        300 * 3600,   # 300 h
+}
