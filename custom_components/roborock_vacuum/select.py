@@ -1,4 +1,4 @@
-"""Entités Select Roborock — vitesse ventilateur, serpillière."""
+"""Entités Select Roborock — ventilateur, serpillière, passages."""
 from __future__ import annotations
 
 import logging
@@ -17,42 +17,39 @@ from .coordinator import RoborockVacuumCoordinator, RoborockData
 
 _LOGGER = logging.getLogger(__name__)
 
+# Nombre de passages de nettoyage
+CLEAN_PASSES = {1: "1 passage", 2: "2 passages", 3: "3 passages"}
+
+# Fréquence d'auto-lavage vadrouille (minutes, 0 = manuel)
+MOP_WASH_FREQ = {
+    0:  "Manuel",
+    10: "Toutes les 10 min",
+    15: "Toutes les 15 min",
+    25: "Toutes les 25 min",
+}
+
+# Mode séchage dock
+DRYING_MODES = {
+    0: "Désactivé",
+    1: "Mode intelligent",
+    2: "Mode intense",
+}
+
 
 @dataclass(frozen=True)
 class RoborockSelectDescription(SelectEntityDescription):
-    options_map: dict[int, str] = None          # code → label
-    current_fn: Callable[[RoborockData], int | None] = lambda d: None
+    options_map: dict = None
+    current_fn: Callable[[RoborockData], Any] = lambda d: None
     command: str = ""
-    param_fn: Callable[[int], list] = lambda v: [v]
+    param_fn: Callable[[Any], list] = lambda v: [v]
+    is_dock: bool = False
 
 
-SELECT_DESCRIPTIONS: tuple[RoborockSelectDescription, ...] = (
-    RoborockSelectDescription(
-        key="fan_speed",
-        name="Vitesse ventilateur",
-        options_map=FAN_SPEEDS,
-        current_fn=lambda d: d.props.status.fan_power
-        if d.props and d.props.status else None,
-        command="set_custom_mode",
-        param_fn=lambda v: [v],
-    ),
-    RoborockSelectDescription(
-        key="mop_intensity",
-        name="Intensité serpillière",
-        options_map=MOP_INTENSITIES,
-        current_fn=lambda d: _get_mop_intensity(d),
-        command="set_water_box_custom_mode",
-        param_fn=lambda v: [v],
-    ),
-    RoborockSelectDescription(
-        key="mop_mode",
-        name="Mode serpillière",
-        options_map=MOP_MODES,
-        current_fn=lambda d: _get_mop_mode(d),
-        command="set_mop_mode",
-        param_fn=lambda v: [v],
-    ),
-)
+def _get_fan_speed(data: RoborockData) -> int | None:
+    try:
+        return data.props.status.fan_power if data.props and data.props.status else None
+    except Exception:
+        return None
 
 
 def _get_mop_intensity(data: RoborockData) -> int | None:
@@ -77,6 +74,107 @@ def _get_mop_mode(data: RoborockData) -> int | None:
         return None
     except Exception:
         return None
+
+
+def _get_clean_passes(data: RoborockData) -> int | None:
+    try:
+        status = data.props.status
+        for attr in ("clean_repeat", "repeat_cleaning", "cleaning_repeat"):
+            val = getattr(status, attr, None)
+            if val is not None:
+                return int(val)
+        return 1  # défaut = 1 passage
+    except Exception:
+        return 1
+
+
+def _get_mop_wash_freq(data: RoborockData) -> int | None:
+    try:
+        swp = data.props.smart_wash_params
+        if swp is None:
+            return None
+        # smart_wash=0 → manuel, sinon wash_interval donne la fréquence
+        smart = getattr(swp, "smart_wash", None)
+        if smart == 0:
+            return 0
+        interval = getattr(swp, "wash_interval", None)
+        return interval
+    except Exception:
+        return None
+
+
+def _get_drying_mode(data: RoborockData) -> int | None:
+    try:
+        status = data.props.status
+        for attr in ("drying_mode", "dry_mode"):
+            val = getattr(status, attr, None)
+            if val is not None:
+                return int(val)
+        return None
+    except Exception:
+        return None
+
+
+SELECT_DESCRIPTIONS: tuple[RoborockSelectDescription, ...] = (
+    # ── Aspirateur ───────────────────────────────────────────────────────────
+    RoborockSelectDescription(
+        key="fan_speed",
+        name="Vitesse ventilateur",
+        icon="mdi:fan",
+        options_map=FAN_SPEEDS,
+        current_fn=_get_fan_speed,
+        command="set_custom_mode",
+        param_fn=lambda v: [v],
+    ),
+    RoborockSelectDescription(
+        key="mop_intensity",
+        name="Intensité serpillière",
+        icon="mdi:water",
+        options_map=MOP_INTENSITIES,
+        current_fn=_get_mop_intensity,
+        command="set_water_box_custom_mode",
+        param_fn=lambda v: [v],
+    ),
+    RoborockSelectDescription(
+        key="mop_mode",
+        name="Mode serpillière",
+        icon="mdi:waves",
+        options_map=MOP_MODES,
+        current_fn=_get_mop_mode,
+        command="set_mop_mode",
+        param_fn=lambda v: [v],
+    ),
+    RoborockSelectDescription(
+        key="clean_passes",
+        name="Nombre de passages",
+        icon="mdi:repeat",
+        options_map=CLEAN_PASSES,
+        current_fn=_get_clean_passes,
+        command="set_clean_repeat",
+        param_fn=lambda v: [v],
+    ),
+    # ── Dock ─────────────────────────────────────────────────────────────────
+    RoborockSelectDescription(
+        key="mop_wash_frequency",
+        name="Fréquence lavage vadrouille",
+        icon="mdi:washing-machine",
+        is_dock=True,
+        options_map=MOP_WASH_FREQ,
+        current_fn=_get_mop_wash_freq,
+        command="set_smart_wash_params",
+        param_fn=lambda v: [{"smart_wash": 0 if v == 0 else 1, "wash_interval": v}],
+    ),
+    RoborockSelectDescription(
+        key="drying_mode",
+        name="Mode séchage dock",
+        icon="mdi:heat-wave",
+        is_dock=True,
+        options_map=DRYING_MODES,
+        current_fn=_get_drying_mode,
+        command="set_drying_mode",
+        param_fn=lambda v: [{"mode": v}],
+    ),
+)
 
 
 async def async_setup_entry(
@@ -119,11 +217,20 @@ class RoborockSelectEntity(CoordinatorEntity[RoborockVacuumCoordinator], SelectE
     @property
     def device_info(self) -> DeviceInfo:
         dev = self._data.device
+        model = dev.product.model if hasattr(dev, "product") else self._duid
+        if self.entity_description.is_dock:
+            return DeviceInfo(
+                identifiers={(DOMAIN, f"{self._duid}_dock")},
+                name=f"{dev.name} Dock",
+                manufacturer="Roborock",
+                model=f"{model} Dock",
+                via_device=(DOMAIN, self._duid),
+            )
         return DeviceInfo(
             identifiers={(DOMAIN, self._duid)},
             name=dev.name,
             manufacturer="Roborock",
-            model=dev.product.model if hasattr(dev, "product") else self._duid,
+            model=model,
         )
 
     @property

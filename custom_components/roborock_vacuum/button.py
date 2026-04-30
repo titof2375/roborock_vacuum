@@ -1,8 +1,8 @@
-"""Entités Button Roborock — remise à zéro des consommables."""
+"""Entités Button Roborock — reset consommables + contrôle dock."""
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from homeassistant.components.button import ButtonEntity, ButtonEntityDescription
 from homeassistant.config_entries import ConfigEntry
@@ -20,10 +20,19 @@ _LOGGER = logging.getLogger(__name__)
 @dataclass(frozen=True)
 class RoborockButtonDescription(ButtonEntityDescription):
     command: str = ""
-    params: list = None
+    params: list = field(default_factory=list)
+    is_dock: bool = False
 
 
 BUTTON_DESCRIPTIONS: tuple[RoborockButtonDescription, ...] = (
+    # ── Nettoyage ────────────────────────────────────────────────────────────
+    RoborockButtonDescription(
+        key="spot_clean",
+        name="Nettoyage ponctuel",
+        icon="mdi:target",
+        command="app_spot",
+    ),
+    # ── Reset consommables ───────────────────────────────────────────────────
     RoborockButtonDescription(
         key="reset_main_brush",
         name="Réinitialiser brosse principale",
@@ -59,6 +68,42 @@ BUTTON_DESCRIPTIONS: tuple[RoborockButtonDescription, ...] = (
         command="reset_consumable",
         params=[{"consumable": "mop_work_time"}],
     ),
+    # ── Dock ─────────────────────────────────────────────────────────────────
+    RoborockButtonDescription(
+        key="dock_auto_empty",
+        name="Vider le bac",
+        icon="mdi:delete-empty",
+        command="app_start_collect_dust",
+        is_dock=True,
+    ),
+    RoborockButtonDescription(
+        key="dock_start_wash",
+        name="Démarrer auto-lavage dock",
+        icon="mdi:washing-machine",
+        command="app_start_wash",
+        is_dock=True,
+    ),
+    RoborockButtonDescription(
+        key="dock_stop_wash",
+        name="Arrêter auto-lavage dock",
+        icon="mdi:washing-machine-off",
+        command="app_stop_wash",
+        is_dock=True,
+    ),
+    RoborockButtonDescription(
+        key="dock_start_drying",
+        name="Démarrer séchage dock",
+        icon="mdi:heat-wave",
+        command="start_drying",
+        is_dock=True,
+    ),
+    RoborockButtonDescription(
+        key="dock_stop_drying",
+        name="Arrêter séchage dock",
+        icon="mdi:stop",
+        command="stop_drying",
+        is_dock=True,
+    ),
 )
 
 
@@ -77,7 +122,7 @@ async def async_setup_entry(
 
 
 class RoborockButtonEntity(CoordinatorEntity[RoborockVacuumCoordinator], ButtonEntity):
-    """Bouton reset consommable Roborock."""
+    """Bouton Roborock."""
 
     _attr_has_entity_name = True
     entity_description: RoborockButtonDescription
@@ -101,11 +146,20 @@ class RoborockButtonEntity(CoordinatorEntity[RoborockVacuumCoordinator], ButtonE
     @property
     def device_info(self) -> DeviceInfo:
         dev = self._data.device
+        model = dev.product.model if hasattr(dev, "product") else self._duid
+        if self.entity_description.is_dock:
+            return DeviceInfo(
+                identifiers={(DOMAIN, f"{self._duid}_dock")},
+                name=f"{dev.name} Dock",
+                manufacturer="Roborock",
+                model=f"{model} Dock",
+                via_device=(DOMAIN, self._duid),
+            )
         return DeviceInfo(
             identifiers={(DOMAIN, self._duid)},
             name=dev.name,
             manufacturer="Roborock",
-            model=dev.product.model if hasattr(dev, "product") else self._duid,
+            model=model,
         )
 
     async def async_press(self) -> None:
@@ -115,6 +169,6 @@ class RoborockButtonEntity(CoordinatorEntity[RoborockVacuumCoordinator], ButtonE
                 self.entity_description.params or [],
             )
             await self.coordinator.async_request_refresh()
-            _LOGGER.info("Reset %s effectué", self.entity_description.key)
+            _LOGGER.info("Commande %s envoyée", self.entity_description.key)
         except Exception as err:
-            _LOGGER.warning("Erreur reset %s : %s", self.entity_description.key, err)
+            _LOGGER.warning("Erreur %s : %s", self.entity_description.key, err)

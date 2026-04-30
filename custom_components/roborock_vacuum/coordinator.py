@@ -14,6 +14,19 @@ from .const import DOMAIN, UPDATE_INTERVAL_SECONDS
 
 _LOGGER = logging.getLogger(__name__)
 
+# Traits rafraîchis à chaque cycle
+_TRAITS_TO_REFRESH = (
+    "status",
+    "clean_summary",
+    "consumables",
+    "dnd",
+    "child_lock",
+    "flow_led_status",
+    "sound_volume",
+    "smart_wash_params",
+    "dust_collection_mode",
+)
+
 
 @dataclass
 class RoborockData:
@@ -67,11 +80,7 @@ class RoborockVacuumCoordinator(DataUpdateCoordinator[dict[str, RoborockData]]):
             prefer_cache=False,
         )
         devices = await self._manager.get_devices()
-        _LOGGER.info(
-            "%d appareil(s) trouvé(s) pour %s",
-            len(devices),
-            self._username,
-        )
+        _LOGGER.info("%d appareil(s) trouvé(s) pour %s", len(devices), self._username)
 
     async def _async_update_data(self) -> dict[str, RoborockData]:
         """Rafraîchit le statut de tous les aspirateurs V1."""
@@ -84,24 +93,20 @@ class RoborockVacuumCoordinator(DataUpdateCoordinator[dict[str, RoborockData]]):
         for device in devices:
             props = device.v1_properties
             if props is None:
-                _LOGGER.debug(
-                    "Appareil %s ignoré (pas V1 ou non supporté)", device.name
-                )
+                _LOGGER.debug("Appareil %s ignoré (pas V1 ou non supporté)", device.name)
                 continue
 
-            # L'appareil est trouvé — on l'enregistre dans tous les cas
-            # (les entités afficheront "indisponible" si les données sont absentes)
+            # Enregistrement dans tous les cas — entités "indisponible" si données absentes
             result[device.duid] = RoborockData(device=device, props=props)
 
             try:
-                # Rafraîchir les traits essentiels en série
-                for trait in (
-                    props.status,
-                    props.clean_summary,
-                    props.consumables,
-                ):
+                for trait_name in _TRAITS_TO_REFRESH:
+                    trait = getattr(props, trait_name, None)
                     if trait is not None:
-                        await trait.refresh()
+                        try:
+                            await trait.refresh()
+                        except Exception:  # noqa: BLE001
+                            pass  # trait non supporté par ce modèle — on ignore
                 _LOGGER.debug("Données mises à jour pour %s", device.name)
 
             except Exception as err:  # noqa: BLE001

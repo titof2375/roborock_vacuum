@@ -1,4 +1,4 @@
-"""Entités Switch Roborock — verrouillage enfant, LED."""
+"""Entités Switch Roborock — verrouillage enfant, LED, boost tapis, DND."""
 from __future__ import annotations
 
 import logging
@@ -55,6 +55,50 @@ def _get_led(data: RoborockData) -> bool | None:
         return None
 
 
+def _get_carpet_boost(data: RoborockData) -> bool | None:
+    try:
+        status = data.props.status
+        for attr in ("carpet_mode", "carpet_boost", "carpet_clean_mode"):
+            val = getattr(status, attr, None)
+            if val is not None:
+                if isinstance(val, dict):
+                    return bool(val.get("current_high", val.get("enabled", 0)))
+                return bool(val)
+        return None
+    except Exception:
+        return None
+
+
+def _get_dnd(data: RoborockData) -> bool | None:
+    try:
+        dnd = data.props.dnd
+        if dnd is None:
+            return None
+        for attr in ("enabled", "status", "active"):
+            val = getattr(dnd, attr, None)
+            if val is not None:
+                return bool(val)
+        return None
+    except Exception:
+        return None
+
+
+def _get_dnd_params(data: RoborockData) -> dict:
+    """Récupère les paramètres DND actuels pour construire la commande complète."""
+    try:
+        dnd = data.props.dnd
+        if dnd is None:
+            return {"start_hour": 22, "start_minute": 0, "end_hour": 7, "end_minute": 0}
+        return {
+            "start_hour": getattr(dnd, "start_hour", 22),
+            "start_minute": getattr(dnd, "start_minute", 0),
+            "end_hour": getattr(dnd, "end_hour", 7),
+            "end_minute": getattr(dnd, "end_minute", 0),
+        }
+    except Exception:
+        return {"start_hour": 22, "start_minute": 0, "end_hour": 7, "end_minute": 0}
+
+
 SWITCH_DESCRIPTIONS: tuple[RoborockSwitchDescription, ...] = (
     RoborockSwitchDescription(
         key="child_lock",
@@ -75,6 +119,28 @@ SWITCH_DESCRIPTIONS: tuple[RoborockSwitchDescription, ...] = (
         command_off="set_flow_led_status",
         params_on=[{"status": 1}],
         params_off=[{"status": 0}],
+    ),
+    RoborockSwitchDescription(
+        key="carpet_boost",
+        name="Boost aspiration tapis",
+        icon="mdi:rug",
+        current_fn=_get_carpet_boost,
+        command_on="set_carpet_mode",
+        command_off="set_carpet_mode",
+        params_on=[{"carpet_mode": 1}],
+        params_off=[{"carpet_mode": 0}],
+    ),
+    # DND — la commande on/off doit inclure les horaires existants
+    # géré via async_turn_on/off custom (voir ci-dessous)
+    RoborockSwitchDescription(
+        key="dnd",
+        name="Ne pas déranger",
+        icon="mdi:sleep",
+        current_fn=_get_dnd,
+        command_on="set_dnd_timer",
+        command_off="set_dnd_timer",
+        params_on=None,   # construit dynamiquement
+        params_off=None,  # construit dynamiquement
     ),
 )
 
@@ -134,20 +200,22 @@ class RoborockSwitchEntity(CoordinatorEntity[RoborockVacuumCoordinator], SwitchE
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         try:
-            await self._data.props.command.send(
-                self.entity_description.command_on,
-                self.entity_description.params_on or [],
-            )
+            if self.entity_description.key == "dnd":
+                params = [{**_get_dnd_params(self._data), "enabled": 1}]
+            else:
+                params = self.entity_description.params_on or []
+            await self._data.props.command.send(self.entity_description.command_on, params)
             await self.coordinator.async_request_refresh()
         except Exception as err:
             _LOGGER.warning("Erreur switch on %s : %s", self.entity_description.key, err)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         try:
-            await self._data.props.command.send(
-                self.entity_description.command_off,
-                self.entity_description.params_off or [],
-            )
+            if self.entity_description.key == "dnd":
+                params = [{**_get_dnd_params(self._data), "enabled": 0}]
+            else:
+                params = self.entity_description.params_off or []
+            await self._data.props.command.send(self.entity_description.command_off, params)
             await self.coordinator.async_request_refresh()
         except Exception as err:
             _LOGGER.warning("Erreur switch off %s : %s", self.entity_description.key, err)
